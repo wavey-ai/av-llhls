@@ -109,6 +109,20 @@ test("parses consecutive Opus frames from v2 payload sizes", () => {
   assert.equal(frames[1].header.pts, 960n);
 });
 
+test("keeps contiguous payloads as zero-copy subarrays by default", () => {
+  const payload = new Uint8Array([0x21, 0x22, 0x23]);
+  const packet = encodeSoundKitAudioFrame({
+    encoding: SoundKitEncoding.Opus,
+    frameCount: 960,
+    sampleRate: 48_000,
+    channels: 2
+  }, payload);
+
+  const [frame] = new SoundKitAudioFrameStream().push(packet);
+  assert.equal(frame.payload.buffer, packet.buffer);
+  assert.deepEqual(Array.from(frame.payload), Array.from(payload));
+});
+
 test("verifies optional packet CRC32", () => {
   const payload = new Uint8Array([0x11, 0x22, 0x33, 0x44]);
   const packet = encodeSoundKitAudioFrame({
@@ -151,4 +165,3 @@ test("uses extended size fields only when needed", () => {
 test("matches the IEEE CRC32 known vector", () => {
   assert.equal(crc32Ieee(new TextEncoder().encode("123456789")), 0xcbf4_3926);
 });
-

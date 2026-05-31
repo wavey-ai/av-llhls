@@ -132,6 +132,15 @@ const readU64Be = (bytes: Uint8Array, offset: number) => {
   return value;
 };
 
+const readU32Be = (bytes: Uint8Array, offset: number) => (
+  (
+    bytes[offset]! * 0x1_000000
+    + (bytes[offset + 1]! << 16)
+    + (bytes[offset + 2]! << 8)
+    + bytes[offset + 3]!
+  ) >>> 0
+);
+
 const writeU64Be = (bytes: Uint8Array, offset: number, value: bigint) => {
   let remaining = value;
   for (let index = 7; index >= 0; index -= 1) {
@@ -141,7 +150,10 @@ const writeU64Be = (bytes: Uint8Array, offset: number, value: bigint) => {
 };
 
 const writeU32Be = (bytes: Uint8Array, offset: number, value: number) => {
-  new DataView(bytes.buffer, bytes.byteOffset + offset, 4).setUint32(0, value >>> 0, false);
+  bytes[offset] = (value >>> 24) & 0xff;
+  bytes[offset + 1] = (value >>> 16) & 0xff;
+  bytes[offset + 2] = (value >>> 8) & 0xff;
+  bytes[offset + 3] = value & 0xff;
 };
 
 const defaultBitsPerSample = (encoding: SoundKitEncoding): SoundKitBitsPerSample => {
@@ -173,7 +185,8 @@ export const crc32IeeeUpdate = (previous: number, bytes: Uint8Array) => {
   let crc = (~previous) >>> 0;
   const table = getCrcTable();
 
-  for (const byte of bytes) {
+  for (let index = 0; index < bytes.length; index += 1) {
+    const byte = bytes[index]!;
     crc = (table[(crc ^ byte) & 0xff]! ^ (crc >>> 8)) >>> 0;
   }
 
@@ -186,6 +199,34 @@ export const soundKitPacketCrc32 = (headerWithoutCrc: Uint8Array, payload: Uint8
   crc32IeeeUpdate(crc32Ieee(headerWithoutCrc), payload)
 );
 
+export const soundKitFrameHeaderByteLength = (bytes: Uint8Array, offset = 0) => {
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new RangeError("offset must be a non-negative integer");
+  }
+  assertAvailable(bytes, offset, SOUNDKIT_FRAME_HEADER_BASE_BYTES);
+
+  const word = readU32Be(bytes, offset);
+  const magic = (word >>> MAGIC_SHIFT) & 0x3f;
+  if (magic !== MAGIC_WORD) {
+    throw new Error(`invalid SoundKit frame header magic 0x${magic.toString(16)}`);
+  }
+  const version = (word >>> VERSION_SHIFT) & 0x3;
+  if (version !== VERSION) {
+    throw new Error(`unsupported SoundKit frame header version ${version}`);
+  }
+
+  const flags = (word >>> FLAGS_SHIFT) & 0xff;
+  if ((flags & FLAG_ID_U64) !== 0 && (flags & FLAG_ID_PRESENT) === 0) {
+    throw new Error("SoundKit frame has 64-bit ID flag without ID present");
+  }
+
+  return SOUNDKIT_FRAME_HEADER_BASE_BYTES
+    + ((flags & FLAG_EXTENDED_SIZES) !== 0 ? SOUNDKIT_FRAME_HEADER_EXTENDED_SIZE_BYTES : 0)
+    + ((flags & FLAG_ID_PRESENT) !== 0 ? ((flags & FLAG_ID_U64) !== 0 ? 8 : 4) : 0)
+    + ((flags & FLAG_PTS_PRESENT) !== 0 ? 8 : 0)
+    + ((flags & FLAG_PACKET_CRC32_PRESENT) !== 0 ? 4 : 0);
+};
+
 export const decodeSoundKitFrameHeader = (bytes: Uint8Array, offset = 0): SoundKitFrameHeader => {
   if (!Number.isInteger(offset) || offset < 0) {
     throw new RangeError("offset must be a non-negative integer");
@@ -193,9 +234,8 @@ export const decodeSoundKitFrameHeader = (bytes: Uint8Array, offset = 0): SoundK
 
   const startOffset = offset;
   assertAvailable(bytes, offset, SOUNDKIT_FRAME_HEADER_BASE_BYTES);
-  const baseView = new DataView(bytes.buffer, bytes.byteOffset + offset, SOUNDKIT_FRAME_HEADER_BASE_BYTES);
-  const word = baseView.getUint32(0, false);
-  const sizeWord = baseView.getUint32(4, false);
+  const word = readU32Be(bytes, offset);
+  const sizeWord = readU32Be(bytes, offset + 4);
   offset += SOUNDKIT_FRAME_HEADER_BASE_BYTES;
 
   const magic = (word >>> MAGIC_SHIFT) & 0x3f;
@@ -259,7 +299,7 @@ export const decodeSoundKitFrameHeader = (bytes: Uint8Array, offset = 0): SoundK
       offset += 8;
     } else {
       assertAvailable(bytes, offset, 4);
-      id = BigInt(new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false));
+      id = BigInt(readU32Be(bytes, offset));
       offset += 4;
     }
   }
@@ -274,7 +314,7 @@ export const decodeSoundKitFrameHeader = (bytes: Uint8Array, offset = 0): SoundK
   let packetCrc32: number | undefined;
   if ((flags & FLAG_PACKET_CRC32_PRESENT) !== 0) {
     assertAvailable(bytes, offset, 4);
-    packetCrc32 = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false);
+    packetCrc32 = readU32Be(bytes, offset);
     offset += 4;
   }
 
@@ -413,4 +453,3 @@ export const soundKitPcmPayloadBytes = (header: Pick<SoundKitFrameHeader, "encod
   }
   return header.frameCount * header.channels * (header.bitsPerSample / 8);
 };
-

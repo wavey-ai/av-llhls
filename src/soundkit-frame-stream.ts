@@ -3,6 +3,8 @@ import {
   decodeSoundKitFrameHeader,
   encodeSoundKitFrameHeader,
   IncompleteSoundKitFrameHeaderError,
+  SOUNDKIT_FRAME_HEADER_BASE_BYTES,
+  soundKitFrameHeaderByteLength,
   verifySoundKitPacketCrc32,
   type SoundKitFrameHeader,
   type SoundKitFrameHeaderInit
@@ -33,17 +35,10 @@ export type SoundKitAudioFrameHeaderInit = Omit<SoundKitFrameHeaderInit, "payloa
   payloadSize?: number;
 };
 
-const concatBytes = (left: Uint8Array, right: Uint8Array) => {
-  if (left.length === 0) return right;
-  if (right.length === 0) return left;
-  const output = new Uint8Array(left.length + right.length);
-  output.set(left);
-  output.set(right, left.length);
-  return output;
-};
-
 export class SoundKitAudioFrameStream {
-  private pending = new Uint8Array(0);
+  private chunks: Uint8Array[] = [];
+  private headOffset = 0;
+  private bufferedByteLength = 0;
   private readonly maxPayloadBytes: number;
   private readonly maxBufferedBytes: number;
   private readonly copyPayload: boolean;
@@ -57,26 +52,33 @@ export class SoundKitAudioFrameStream {
   }
 
   get bufferedBytes() {
-    return this.pending.length;
+    return this.bufferedByteLength;
   }
 
   reset() {
-    this.pending = new Uint8Array(0);
+    this.chunks = [];
+    this.headOffset = 0;
+    this.bufferedByteLength = 0;
   }
 
   push(chunk: Uint8Array): SoundKitAudioFrame[] {
-    if (this.pending.length + chunk.length > this.maxBufferedBytes) {
+    if (this.bufferedByteLength + chunk.length > this.maxBufferedBytes) {
       throw new RangeError("SoundKit audio frame buffer exceeded maxBufferedBytes");
     }
 
-    const bytes = concatBytes(this.pending, chunk);
+    if (chunk.length > 0) this.enqueue(chunk);
     const frames: SoundKitAudioFrame[] = [];
-    let offset = 0;
 
-    while (offset < bytes.length) {
+    while (this.bufferedByteLength >= SOUNDKIT_FRAME_HEADER_BASE_BYTES) {
       let header: SoundKitFrameHeader;
+      let headerByteLength: number;
       try {
-        header = decodeSoundKitFrameHeader(bytes, offset);
+        const base = this.peekBytes(SOUNDKIT_FRAME_HEADER_BASE_BYTES);
+        if (base === null) break;
+        headerByteLength = soundKitFrameHeaderByteLength(base);
+        const encodedHeader = this.peekBytes(headerByteLength);
+        if (encodedHeader === null) break;
+        header = decodeSoundKitFrameHeader(encodedHeader);
       } catch (error) {
         if (error instanceof IncompleteSoundKitFrameHeaderError) break;
         throw error;
@@ -86,32 +88,106 @@ export class SoundKitAudioFrameStream {
         throw new RangeError("SoundKit audio frame payload exceeded maxPayloadBytes");
       }
 
-      const payloadOffset = offset + header.headerBytes;
-      const nextOffset = payloadOffset + header.payloadSize;
-      if (nextOffset > bytes.length) break;
+      const frameByteLength = headerByteLength + header.payloadSize;
+      if (this.bufferedByteLength < frameByteLength) break;
 
-      const encodedHeader = bytes.subarray(offset, payloadOffset);
-      const payloadView = bytes.subarray(payloadOffset, nextOffset);
+      const encodedHeader = this.takeBytes(headerByteLength, false);
+      const payloadView = this.takeBytes(header.payloadSize, this.copyPayload);
       if (this.verifyPacketCrc32 && header.packetCrc32 !== undefined && !verifySoundKitPacketCrc32(header, encodedHeader, payloadView)) {
         throw new Error("SoundKit audio frame CRC32 mismatch");
       }
 
       frames.push({
         header,
-        payload: this.copyPayload ? payloadView.slice() : payloadView,
+        payload: payloadView,
         payloadLength: header.payloadSize,
-        byteLength: nextOffset - offset
+        byteLength: frameByteLength
       });
-      offset = nextOffset;
     }
 
-    this.pending = offset === bytes.length ? new Uint8Array(0) : bytes.slice(offset);
     return frames;
   }
 
   flush() {
-    if (this.pending.length > 0) {
-      throw new Error(`SoundKit audio frame stream ended with ${this.pending.length} buffered bytes`);
+    if (this.bufferedByteLength > 0) {
+      throw new Error(`SoundKit audio frame stream ended with ${this.bufferedByteLength} buffered bytes`);
+    }
+  }
+
+  private enqueue(chunk: Uint8Array) {
+    this.chunks.push(chunk);
+    this.bufferedByteLength += chunk.length;
+  }
+
+  private peekBytes(byteLength: number) {
+    if (this.bufferedByteLength < byteLength) return null;
+    if (byteLength === 0) return new Uint8Array(0);
+
+    const head = this.chunks[0]!;
+    const headAvailable = head.length - this.headOffset;
+    if (headAvailable >= byteLength) {
+      return head.subarray(this.headOffset, this.headOffset + byteLength);
+    }
+
+    const output = new Uint8Array(byteLength);
+    this.copyFromQueue(output);
+    return output;
+  }
+
+  private takeBytes(byteLength: number, copy: boolean) {
+    if (this.bufferedByteLength < byteLength) {
+      throw new RangeError("not enough queued bytes");
+    }
+    if (byteLength === 0) return new Uint8Array(0);
+
+    const head = this.chunks[0]!;
+    const headAvailable = head.length - this.headOffset;
+    let output: Uint8Array;
+
+    if (headAvailable >= byteLength) {
+      const view = head.subarray(this.headOffset, this.headOffset + byteLength);
+      output = copy ? view.slice() : view;
+    } else {
+      output = new Uint8Array(byteLength);
+      this.copyFromQueue(output);
+    }
+
+    this.consumeBytes(byteLength);
+    return output;
+  }
+
+  private copyFromQueue(target: Uint8Array) {
+    let targetOffset = 0;
+    let remaining = target.length;
+    let chunkIndex = 0;
+    let chunkOffset = this.headOffset;
+
+    while (remaining > 0) {
+      const chunk = this.chunks[chunkIndex]!;
+      const copyLength = Math.min(remaining, chunk.length - chunkOffset);
+      target.set(chunk.subarray(chunkOffset, chunkOffset + copyLength), targetOffset);
+      targetOffset += copyLength;
+      remaining -= copyLength;
+      chunkIndex += 1;
+      chunkOffset = 0;
+    }
+  }
+
+  private consumeBytes(byteLength: number) {
+    let remaining = byteLength;
+    this.bufferedByteLength -= byteLength;
+
+    while (remaining > 0) {
+      const head = this.chunks[0]!;
+      const headAvailable = head.length - this.headOffset;
+      if (remaining < headAvailable) {
+        this.headOffset += remaining;
+        return;
+      }
+
+      remaining -= headAvailable;
+      this.chunks.shift();
+      this.headOffset = 0;
     }
   }
 }
@@ -138,4 +214,3 @@ export const encodeSoundKitAudioFrame = (
   output.set(payload, headerBytes.length);
   return output;
 };
-
