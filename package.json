@@ -20,6 +20,7 @@
   "scripts": {
     "build": "node scripts/build.mjs && tsc --emitDeclarationOnly",
     "clean": "node scripts/clean.mjs",
+    "prepare": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "keywords": [
