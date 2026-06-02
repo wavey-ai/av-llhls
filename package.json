@@ -37,6 +37,14 @@
     "type": "git",
     "url": "git+https://github.com/wavey-ai/av-llhls.git"
   },
+  "peerDependencies": {
+    "hls.js": "^1.6.16"
+  },
+  "peerDependenciesMeta": {
+    "hls.js": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "esbuild": "^0.25.5",

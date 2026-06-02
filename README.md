@@ -1,13 +1,43 @@
 # av-llhls
 
-Audio-only LL-HLS transport pieces for Wavey browser monitoring.
+LL-HLS transport pieces for Wavey browser monitoring.
 
-The intended browser path is:
+The intended browser audio path is:
 
 1. Fetch low-latency audio parts from an edge tail endpoint.
 2. Parse compact SoundKit v2 audio frames.
 3. Decode raw Opus packets through pure Rust `libopus-rs` WASM.
 4. Write decoded PCM blocks into `SharedArrayBuffer` rings for `@wavey-ai/web-audio-mixer`.
+
+The intended browser video path is:
+
+1. Load the edge `/<stream_id>/stream.m3u8` playlist with native HLS or an
+   `hls.js`-compatible constructor.
+2. Attach the stream to an internal `HTMLVideoElement` so the browser owns
+   fMP4 demux, H.264 decode, AAC decode, buffering, and A/V sync.
+3. Paint decoded video frames into a supplied `HTMLCanvasElement` with
+   `requestVideoFrameCallback`, falling back to `requestAnimationFrame`.
+
+```ts
+import Hls from "hls.js";
+import { startLlHlsVideoCanvas } from "@wavey-ai/av-llhls";
+
+const controller = startLlHlsVideoCanvas({
+  baseUrl: "https://edge.example/live",
+  streamId: "0",
+  canvas: document.querySelector("canvas")!,
+  hlsConstructor: Hls,
+  fit: "contain"
+});
+```
+
+For H.264 + AAC in the same CMAF/fMP4 LL-HLS rendition, browser playback is the
+right sync primitive: the media element uses the muxed timestamps and its audio
+clock. Canvas is only the video presentation surface, so drawing frames to
+canvas does not break A/V sync. If audio is delivered through this package's
+separate SoundKit/Opus path while video is delivered through HLS, sync becomes a
+separate application-level clocking problem and should be treated as approximate
+monitoring unless the edge also provides a common timestamp/latency discipline.
 
 ## Frame Format
 
