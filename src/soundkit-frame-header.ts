@@ -17,8 +17,8 @@ const FLAG_PACKET_CRC32_PRESENT = 1 << 3;
 const FLAG_BIG_ENDIAN = 1 << 4;
 const FLAG_EXTENDED_SIZES = 1 << 5;
 const FLAG_DISCONTINUITY = 1 << 6;
-const FLAG_CONFIG = 1 << 7;
-const PUBLIC_PACKET_FLAGS = FLAG_DISCONTINUITY | FLAG_CONFIG;
+const FLAG_ENCRYPTED = 1 << 7;
+const PUBLIC_PACKET_FLAGS = FLAG_DISCONTINUITY | FLAG_ENCRYPTED;
 const SHORT_SIZE_SENTINEL = 0xffff;
 
 export const SOUNDKIT_FRAME_HEADER_VERSION = VERSION;
@@ -60,7 +60,7 @@ export enum SoundKitEndianness {
 export const SoundKitPacketFlags = Object.freeze({
   None: 0,
   Discontinuity: FLAG_DISCONTINUITY,
-  Config: FLAG_CONFIG
+  Encrypted: FLAG_ENCRYPTED
 });
 
 export type SoundKitFrameHeader = {

@@ -6,6 +6,7 @@ import {
   SoundKitAudioFrameStream,
   SoundKitEncoding,
   SoundKitEndianness,
+  SoundKitPacketFlags,
   crc32Ieee,
   decodeSoundKitFrameHeader,
   encodeSoundKitAudioFrame,
@@ -41,6 +42,20 @@ test("encodes compact SoundKit v2 headers with Rust-compatible field mapping", (
   assert.equal(decoded.idIsU64, false);
   assert.equal(decoded.pts, 960n);
   assert.equal(decoded.headerBytes, 20);
+});
+
+test("preserves the encrypted packet flag", () => {
+  const headerBytes = encodeSoundKitFrameHeader({
+    encoding: SoundKitEncoding.Opus,
+    payloadSize: 40,
+    frameCount: 960,
+    sampleRate: 48_000,
+    channels: 2,
+    packetFlags: SoundKitPacketFlags.Encrypted
+  });
+
+  const decoded = decodeSoundKitFrameHeader(headerBytes);
+  assert.equal(decoded.packetFlags & SoundKitPacketFlags.Encrypted, SoundKitPacketFlags.Encrypted);
 });
 
 test("derives PCM payload byte length from frame count", () => {

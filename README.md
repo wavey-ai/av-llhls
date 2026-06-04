@@ -78,6 +78,32 @@ const decoder = new RustOpusWasmFrameDecoder(
 
 The current `libopus-rs` WASM surface is a pure Rust, 48 kHz CELT-only raw Opus packet decoder. The LL-HLS edge should feed raw Opus packets, not Ogg pages.
 
+## Mesh Edge Discovery
+
+`av-mesh` nodes expose `/api/mesh` and advertise `edge_services` with public
+`playback_base_url` values. `av-llhls` can use one or more mesh nodes as seeds,
+score the advertised edges locally, then tail the selected node directly:
+
+```ts
+import { resolveMeshAudioTailOptions, tailAudioParts } from "@wavey-ai/av-llhls";
+
+const tailOptions = await resolveMeshAudioTailOptions({
+  seeds: ["https://uk-edge.example/live", "https://jp-edge.example/live"],
+  streamId: "9007199254741993",
+  preferredRegion: "uk"
+});
+
+for await (const part of tailAudioParts(tailOptions)) {
+  // Decode SoundKit/Opus bytes from part.bytes.
+}
+```
+
+Stream ids should be passed as strings or `bigint` values so Snowflake/u64 ids
+do not lose precision in JavaScript. The selector prefers nodes that already
+report the stream, but a healthy node without the stream is still eligible
+because `/live/<stream_id>/tail` creates mesh demand and returns `204` until
+replicated bytes arrive.
+
 ## Development
 
 ```sh
