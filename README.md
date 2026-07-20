@@ -31,13 +31,14 @@ const controller = startLlHlsVideoCanvas({
 });
 ```
 
-For H.264 + AAC in the same CMAF/fMP4 LL-HLS rendition, browser playback is the
-right sync primitive: the media element uses the muxed timestamps and its audio
-clock. Canvas is only the video presentation surface, so drawing frames to
-canvas does not break A/V sync. If audio is delivered through this package's
-separate SoundKit/Opus path while video is delivered through HLS, sync becomes a
-separate application-level clocking problem and should be treated as approximate
-monitoring unless the edge also provides a common timestamp/latency discipline.
+For H.264 and AAC in one CMAF/fMP4 LL-HLS rendition, use browser playback for
+synchronization. The media element uses the muxed timestamps and its audio
+clock. Canvas is only the video presentation surface. Thus, drawing frames to
+canvas does not break A/V synchronization.
+
+Separate SoundKit/Opus audio and HLS video use different application clocks.
+Treat this configuration as approximate monitoring. For exact synchronization,
+the edge must supply a common timestamp and latency policy.
 
 ## Frame Format
 
@@ -99,9 +100,9 @@ for await (const part of tailAudioParts(tailOptions)) {
 ```
 
 Stream ids should be passed as strings or `bigint` values so Snowflake/u64 ids
-do not lose precision in JavaScript. The selector prefers nodes that already
-report the stream, but a healthy node without the stream is still eligible
-because `/live/<stream_id>/tail` creates mesh demand and returns `204` until
+do not lose precision in JavaScript. The selector prefers nodes that report the
+stream. A healthy node without the stream is also eligible. Its
+`/live/<stream_id>/tail` endpoint creates mesh demand and returns `204` until
 replicated bytes arrive.
 
 ## Development
